@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { Play, Pause, RotateCcw, Upload, Crosshair, FileUp } from "lucide-react";
 
 const TelemetryVisualizer = () => {
@@ -24,22 +24,43 @@ const TelemetryVisualizer = () => {
       const text = e.target.result;
       const lines = text.trim().split("\n");
       
-      const parsed = lines
-        .slice(1) // Skip header
-        .map((line) => {
-          const [ts, type, x, y, hit] = line.split(",");
-          return {
-            ts: parseInt(ts),
-            type: type.trim(),
-            y: parseFloat(x), // Cam_Rot_X (Vertical)
-            x: parseFloat(y), // Player_Rot_Y (Horizontal)
-            hit: parseInt(hit),
-          };
-        })
+      const rawData = [];
+      
+      // luis_s1_raw.csv format:
+      // 0:Timestamp_ms, 1:Event_Type, 2:Difficulty, 3:Trial_Index, 4:Cam_Rot_X, 5:Player_Rot_Y, 6:Target_Index, 7:Target_Pos_X, 8:Target_Pos_Y, 9:Target_Pos_Z
+      lines.slice(1).forEach((line) => {
+        if (!line.trim()) return;
+        const cols = line.split(",");
+        
+        rawData.push({
+          ts: parseInt(cols[0]),
+          type: cols[1].trim(),
+          y: parseFloat(cols[4]), // Cam_Rot_X (Vertical Aim)
+          x: parseFloat(cols[5]), // Player_Rot_Y (Horizontal Aim)
+          target_id: parseInt(cols[6])
+        });
+      });
+
+      // Filter out empty rows and sort chronologically
+      const validData = rawData
         .filter((d) => !isNaN(d.ts))
         .sort((a, b) => a.ts - b.ts);
 
-      setData(parsed);
+      // Mark the final point of each target trajectory as a "ShotFired" so it draws the green dot
+      const processedData = [];
+      for (let i = 0; i < validData.length; i++) {
+        processedData.push(validData[i]);
+
+        if (i === validData.length - 1 || validData[i + 1].target_id !== validData[i].target_id) {
+          processedData.push({
+            ...validData[i],
+            type: "ShotFired",
+            hit: 1 
+          });
+        }
+      }
+
+      setData(processedData);
       setCurrentTime(0);
       setIsPlaying(false);
     };
@@ -53,13 +74,21 @@ const TelemetryVisualizer = () => {
 
     const xs = data.map((d) => d.x);
     const ys = data.map((d) => d.y);
-    const padding = 0.05;
+
+    const rawMinX = Math.min(...xs);
+    const rawMaxX = Math.max(...xs);
+    const rawMinY = Math.min(...ys);
+    const rawMaxY = Math.max(...ys);
+
+    // Dynamic padding for small decimal rotation values
+    const padX = (rawMaxX - rawMinX) * 0.1 || 0.1;
+    const padY = (rawMaxY - rawMinY) * 0.1 || 0.1;
 
     return {
-      minX: Math.min(...xs) - padding,
-      maxX: Math.max(...xs) + padding,
-      minY: Math.min(...ys) - padding,
-      maxY: Math.max(...ys) + padding,
+      minX: rawMinX - padX,
+      maxX: rawMaxX + padX,
+      minY: rawMinY - padY,
+      maxY: rawMaxY + padY,
       maxTs: Math.max(...data.map((d) => d.ts)),
     };
   }, [data]);
@@ -166,7 +195,7 @@ const TelemetryVisualizer = () => {
       }
     });
 
-    const lastPos = visibleData.findLast((d) => d.type === "MouseMove");
+    const lastPos = [...visibleData].reverse().find((d) => d.type === "MouseMove");
     if (lastPos) {
       const rx = mapX(lastPos.x);
       const ry = mapY(lastPos.y);
